@@ -56,7 +56,12 @@ static void MX_USART1_UART_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
+uint8_t tx_msg[] = "HELLO";
+uint8_t rx_buffer[5]; // To match "HELLO" length
+enum State { INITIAL_RED, WAITING_BLUE, RECEIVED_GREEN };
+enum State currentState = INITIAL_RED;
+uint32_t startTime;
+uint32_t elapsed = 0;
 /* USER CODE END 0 */
 
 /**
@@ -90,41 +95,42 @@ int main(void)
   MX_GPIO_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
-  uint8_t tx_msg[] = "HELLO";
-  uint8_t rx_buffer[5]; // To match "HELLO" length
-  enum State { INITIAL_RED, WAITING_BLUE, RECEIVED_GREEN };
-  enum State currentState = INITIAL_RED;
-  uint32_t startTime;
-
   startTime = HAL_GetTick();
-
-  // Start Listening in Non-Blocking Interrupt Mode
-  HAL_UART_Receive_IT(&huart1, rx_buffer, 5);
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-	  uint32_t elapsed = HAL_GetTick() - startTime;
+	  elapsed = HAL_GetTick() - startTime;
 
+	  // --- SENDER LOGIC ---
 	  if (currentState == INITIAL_RED) {
 		  HAL_GPIO_TogglePin(GPIOH, GPIO_PIN_12); // Blink Red
 		  HAL_Delay(200);
 
 		  if (elapsed > 5000) {
-			  // Send Message
 			  HAL_UART_Transmit(&huart1, tx_msg, 5, 100);
-
-			  // Switch to Blue
 			  HAL_GPIO_WritePin(GPIOH, GPIO_PIN_12, GPIO_PIN_RESET);
 			  currentState = WAITING_BLUE;
 		  }
 	  }
+
+	  // --- RECEIVER LOGIC (Polling) ---
+	  // We check if data is waiting. We use a very short timeout (10ms)
+	  // so it doesn't block the blinking LED for too long.
 	  else if (currentState == WAITING_BLUE) {
 		  HAL_GPIO_TogglePin(GPIOH, GPIO_PIN_10); // Blink Blue
 		  HAL_Delay(200);
+		  // Polling Receive: Wait up to 50ms for 5 bytes
+		  if (HAL_UART_Receive(&huart1, rx_buffer, 5, 50) == HAL_OK) {
+			  if (rx_buffer[0] == 'H' && rx_buffer[4] == 'O') {
+				  currentState = RECEIVED_GREEN;
+				  HAL_GPIO_WritePin(GPIOH, GPIO_PIN_10, GPIO_PIN_RESET);
+			  }
+		  }
 	  }
+
 	  else if (currentState == RECEIVED_GREEN) {
 		  HAL_GPIO_TogglePin(GPIOH, GPIO_PIN_11); // Blink Green
 		  HAL_Delay(200);
@@ -133,20 +139,6 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
   }
-
-	void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
-	{
-	    if (huart->Instance == USART1) {
-	        // Check if message is "HELLO"
-	        if (rx_buffer[0] == 'H' && rx_buffer[4] == 'O') {
-	            currentState = RECEIVED_GREEN;
-	            HAL_GPIO_WritePin(GPIOH, GPIO_PIN_10, GPIO_PIN_RESET); // Stop Blue
-	        }
-
-	        // Re-enable the interrupt for the next message
-	        HAL_UART_Receive_IT(&huart1, rx_buffer, 5);
-	    }
-	}
   /* USER CODE END 3 */
 }
 
@@ -165,7 +157,7 @@ void SystemClock_Config(void)
   __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
 
   /** Initializes the RCC Oscillators according to the specified parameters
-  * in the RCC_OscInitTypeDef structure.
+  * in the RCC_OscInitTypeDef structure
   */
   RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
   RCC_OscInitStruct.HSIState = RCC_HSI_ON;
