@@ -56,7 +56,13 @@ static void MX_USART1_UART_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-uint8_t tx_msg[] = "HELLO";
+#define BOARD_B
+
+#ifdef BOARD_A
+    uint8_t tx_msg[] = "HELLA";
+#else
+    uint8_t tx_msg[] = "HELLB";
+#endif
 uint8_t rx_buffer[5]; // To match "HELLO" length
 enum State { INITIAL_RED, WAITING_BLUE, RECEIVED_GREEN };
 enum State currentState = INITIAL_RED;
@@ -102,38 +108,36 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-	  elapsed = HAL_GetTick() - startTime;
+	  uint32_t currentTick = HAL_GetTick();
 
-	  // --- SENDER LOGIC ---
-	  if (currentState == INITIAL_RED) {
-		  HAL_GPIO_TogglePin(GPIOH, GPIO_PIN_12); // Blink Red
-		  HAL_Delay(200);
-
-		  if (elapsed > 5000) {
-			  HAL_UART_Transmit(&huart1, tx_msg, 5, 100);
-			  HAL_GPIO_WritePin(GPIOH, GPIO_PIN_12, GPIO_PIN_RESET);
-			  currentState = WAITING_BLUE;
-		  }
+	  // 1. Non-blocking Blink Logic
+	  if (currentTick - elapsed > 200) {
+		  toggle_led_based_on_state();
+		  elapsed = currentTick;
 	  }
 
-	  // --- RECEIVER LOGIC (Polling) ---
-	  // We check if data is waiting. We use a very short timeout (10ms)
-	  // so it doesn't block the blinking LED for too long.
-	  else if (currentState == WAITING_BLUE) {
-		  HAL_GPIO_TogglePin(GPIOH, GPIO_PIN_10); // Blink Blue
-		  HAL_Delay(200);
-		  // Polling Receive: Wait up to 50ms for 5 bytes
-		  if (HAL_UART_Receive(&huart1, rx_buffer, 5, 50) == HAL_OK) {
-			  if (rx_buffer[0] == 'H' && rx_buffer[4] == 'O') {
+	  // 2. Sender Logic
+	  if (currentState == INITIAL_RED && (currentTick - startTime > 5000)) {
+		  HAL_UART_Transmit(&huart1, tx_msg, 5, 100);
+		  currentState = WAITING_BLUE;
+	  }
+
+	  // 3. Receiver Logic (The Fix)
+	  if (currentState == WAITING_BLUE) {
+		  // We increase the timeout here so we spend most of our time listening
+		  HAL_StatusTypeDef status = HAL_UART_Receive(&huart1, rx_buffer, 5, 100);
+
+		  if (status == HAL_OK) {
+			  if (rx_buffer[0] == 'H') {
 				  currentState = RECEIVED_GREEN;
-				  HAL_GPIO_WritePin(GPIOH, GPIO_PIN_10, GPIO_PIN_RESET);
 			  }
+		  } else if (status == HAL_TIMEOUT) {
+			  currentState = INITIAL_RED;
+			  toggle_led_based_on_state();
+		  } else if (status == HAL_ERROR) {
+			  // If you get an error, the UART might be "Overrun". Reset it:
+			  __HAL_UART_CLEAR_OREFLAG(&huart1);
 		  }
-	  }
-
-	  else if (currentState == RECEIVED_GREEN) {
-		  HAL_GPIO_TogglePin(GPIOH, GPIO_PIN_11); // Blink Green
-		  HAL_Delay(200);
 	  }
     /* USER CODE END WHILE */
 
@@ -248,7 +252,34 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+void toggle_led_based_on_state(void)
+{
+    switch (currentState)
+    {
+        case INITIAL_RED:
+            // Toggle Red, ensure others are OFF
+            HAL_GPIO_TogglePin(GPIOH, GPIO_PIN_12);
+            HAL_GPIO_WritePin(GPIOH, GPIO_PIN_10 | GPIO_PIN_11, GPIO_PIN_RESET);
+            break;
 
+        case WAITING_BLUE:
+            // Toggle Blue, ensure others are OFF
+            HAL_GPIO_TogglePin(GPIOH, GPIO_PIN_10);
+            HAL_GPIO_WritePin(GPIOH, GPIO_PIN_11 | GPIO_PIN_12, GPIO_PIN_RESET);
+            break;
+
+        case RECEIVED_GREEN:
+            // Toggle Green, ensure others are OFF
+            HAL_GPIO_TogglePin(GPIOH, GPIO_PIN_11);
+            HAL_GPIO_WritePin(GPIOH, GPIO_PIN_10 | GPIO_PIN_12, GPIO_PIN_RESET);
+            break;
+
+        default:
+            // Safety: Turn everything off if state is unknown
+            HAL_GPIO_WritePin(GPIOH, GPIO_PIN_10 | GPIO_PIN_11 | GPIO_PIN_12, GPIO_PIN_RESET);
+            break;
+    }
+}
 /* USER CODE END 4 */
 
 /**
