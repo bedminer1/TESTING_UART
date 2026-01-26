@@ -40,7 +40,7 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-UART_HandleTypeDef huart1;
+UART_HandleTypeDef huart6;
 
 /* USER CODE BEGIN PV */
 
@@ -49,25 +49,41 @@ UART_HandleTypeDef huart1;
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
-static void MX_USART1_UART_Init(void);
+static void MX_USART6_UART_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-#define BOARD_B
+// TX/RX
 
-#ifdef BOARD_A
-    uint8_t tx_msg[] = "HELLA";
-#else
-    uint8_t tx_msg[] = "HELLB";
-#endif
+uint8_t tx_msg[] = "HELLO";
 uint8_t rx_buffer[5]; // To match "HELLO" length
-enum State { INITIAL_RED, WAITING_BLUE, RECEIVED_GREEN };
-enum State currentState = INITIAL_RED;
+
+// STATES
+enum State { INITIAL_WHITE, WAITING_BLUE, RECEIVED_GREEN, ERROR_RED };
+enum State currentState = INITIAL_WHITE;
+
+// TIME
 uint32_t startTime;
 uint32_t elapsed = 0;
+uint32_t lastTxTick = 0;
+
+// Buzzer Function
+void buzzer_beep(uint16_t duration_ms, uint16_t frequency_hz) {
+	uint32_t delay_us = 1000000 / (frequency_hz * 2);
+	uint32_t num_cycles = (duration_ms * 1000) / (delay_us * 2);
+
+	for (uint32_t i = 0; i < num_cycles; i++) {
+		HAL_GPIO_WritePin(GPIOD, GPIO_PIN_14, GPIO_PIN_SET);
+		// We use a tiny loop for microseconds because HAL_Delay is only milliseconds
+		for(volatile int j = 0; j < delay_us * 10; j++);
+
+		HAL_GPIO_WritePin(GPIOD, GPIO_PIN_14, GPIO_PIN_RESET);
+		for(volatile int j = 0; j < delay_us * 10; j++);
+	}
+}
 /* USER CODE END 0 */
 
 /**
@@ -78,7 +94,7 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-
+	uint8_t lastButtonState = GPIO_PIN_SET;
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -99,46 +115,67 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_USART1_UART_Init();
+  MX_USART6_UART_Init();
   /* USER CODE BEGIN 2 */
+  // Initialization "Beep Beep"
+    buzzer_beep(100, 255);
+    HAL_Delay(50);
+    buzzer_beep(100, 255);
   startTime = HAL_GetTick();
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  while (1)
-  {
-	  uint32_t currentTick = HAL_GetTick();
+    while (1)
+    {
+        uint32_t currentTick = HAL_GetTick();
 
-	  // 1. Non-blocking Blink Logic
-	  if (currentTick - elapsed > 200) {
-		  toggle_led_based_on_state();
-		  elapsed = currentTick;
-	  }
+        // 1. BUTTON TOGGLE LOGIC (PA0)
+              uint8_t currentButtonState = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0);
 
-	  // 2. Sender Logic
-	  if (currentState == INITIAL_RED && (currentTick - startTime > 5000)) {
-		  HAL_UART_Transmit(&huart1, tx_msg, 5, 100);
-		  currentState = WAITING_BLUE;
-	  }
+              // Check for a "Falling Edge" (Button just got pressed)
+              if (currentButtonState == GPIO_PIN_RESET && lastButtonState == GPIO_PIN_SET) {
+                  // Toggle between states
+                  if (currentState == WAITING_BLUE) {
+                      currentState = ERROR_RED;
+                  } else {
+                      currentState = WAITING_BLUE;
+                  }
+                  HAL_Delay(50); // Simple debounce
+              }
+              lastButtonState = currentButtonState;
 
-	  // 3. Receiver Logic (The Fix)
-	  if (currentState == WAITING_BLUE) {
-		  // We increase the timeout here so we spend most of our time listening
-		  HAL_StatusTypeDef status = HAL_UART_Receive(&huart1, rx_buffer, 5, 100);
+              // 2. LED UPDATE
+              if (currentTick - elapsed > 100) {
+                  toggle_led_based_on_state();
+                  elapsed = currentTick;
+              }
 
-		  if (status == HAL_OK) {
-			  if (rx_buffer[0] == 'H') {
-				  currentState = RECEIVED_GREEN;
-			  }
-		  } else if (status == HAL_TIMEOUT) {
-			  currentState = INITIAL_RED;
-			  toggle_led_based_on_state();
-		  } else if (status == HAL_ERROR) {
-			  // If you get an error, the UART might be "Overrun". Reset it:
-			  __HAL_UART_CLEAR_OREFLAG(&huart1);
-		  }
-	  }
+              // 3. MODE LOGIC
+              if (currentState == WAITING_BLUE) {
+                  // --- TX MODE (BLUE) ---
+                  if (currentTick - lastTxTick > 200) {
+                      HAL_UART_Transmit(&huart6, tx_msg, 5, 10);
+                      lastTxTick = currentTick;
+                  }
+              }
+              else if (currentState == ERROR_RED) {
+                  // --- RX MODE (RED) ---
+                  if (HAL_UART_Receive(&huart6, rx_buffer, 5, 10) == HAL_OK) {
+                      if (rx_buffer[0] == 'H') {
+                          currentState = RECEIVED_GREEN;
+                          startTime = currentTick;
+                      }
+                  } else {
+                      __HAL_UART_CLEAR_OREFLAG(&huart6);
+                  }
+              }
+              else if (currentState == RECEIVED_GREEN) {
+                  // Auto-return to TX Mode after 3 seconds of success
+                  if (currentTick - startTime > 3000) {
+                      currentState = WAITING_BLUE;
+                  }
+              }
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -161,7 +198,7 @@ void SystemClock_Config(void)
   __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
 
   /** Initializes the RCC Oscillators according to the specified parameters
-  * in the RCC_OscInitTypeDef structure
+  * in the RCC_OscInitTypeDef structure.
   */
   RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
   RCC_OscInitStruct.HSIState = RCC_HSI_ON;
@@ -188,35 +225,35 @@ void SystemClock_Config(void)
 }
 
 /**
-  * @brief USART1 Initialization Function
+  * @brief USART6 Initialization Function
   * @param None
   * @retval None
   */
-static void MX_USART1_UART_Init(void)
+static void MX_USART6_UART_Init(void)
 {
 
-  /* USER CODE BEGIN USART1_Init 0 */
+  /* USER CODE BEGIN USART6_Init 0 */
 
-  /* USER CODE END USART1_Init 0 */
+  /* USER CODE END USART6_Init 0 */
 
-  /* USER CODE BEGIN USART1_Init 1 */
+  /* USER CODE BEGIN USART6_Init 1 */
 
-  /* USER CODE END USART1_Init 1 */
-  huart1.Instance = USART1;
-  huart1.Init.BaudRate = 115200;
-  huart1.Init.WordLength = UART_WORDLENGTH_8B;
-  huart1.Init.StopBits = UART_STOPBITS_1;
-  huart1.Init.Parity = UART_PARITY_NONE;
-  huart1.Init.Mode = UART_MODE_TX_RX;
-  huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
-  if (HAL_UART_Init(&huart1) != HAL_OK)
+  /* USER CODE END USART6_Init 1 */
+  huart6.Instance = USART6;
+  huart6.Init.BaudRate = 115200;
+  huart6.Init.WordLength = UART_WORDLENGTH_8B;
+  huart6.Init.StopBits = UART_STOPBITS_1;
+  huart6.Init.Parity = UART_PARITY_NONE;
+  huart6.Init.Mode = UART_MODE_TX_RX;
+  huart6.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart6.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart6) != HAL_OK)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN USART1_Init 2 */
+  /* USER CODE BEGIN USART6_Init 2 */
 
-  /* USER CODE END USART1_Init 2 */
+  /* USER CODE END USART6_Init 2 */
 
 }
 
@@ -233,11 +270,16 @@ static void MX_GPIO_Init(void)
   /* USER CODE END MX_GPIO_Init_1 */
 
   /* GPIO Ports Clock Enable */
-  __HAL_RCC_GPIOB_CLK_ENABLE();
+  __HAL_RCC_GPIOG_CLK_ENABLE();
   __HAL_RCC_GPIOH_CLK_ENABLE();
+  __HAL_RCC_GPIOD_CLK_ENABLE();
+  __HAL_RCC_GPIOA_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOH, GPIO_PIN_12|GPIO_PIN_11|GPIO_PIN_10, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_14, GPIO_PIN_RESET);
 
   /*Configure GPIO pins : PH12 PH11 PH10 */
   GPIO_InitStruct.Pin = GPIO_PIN_12|GPIO_PIN_11|GPIO_PIN_10;
@@ -245,6 +287,19 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOH, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PD14 */
+  GPIO_InitStruct.Pin = GPIO_PIN_14;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PA0 */
+  GPIO_InitStruct.Pin = GPIO_PIN_0;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
@@ -254,28 +309,25 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 void toggle_led_based_on_state(void)
 {
+    // First, turn everything OFF (Set pins HIGH)
+    HAL_GPIO_WritePin(GPIOH, GPIO_PIN_10 | GPIO_PIN_11 | GPIO_PIN_12, GPIO_PIN_SET);
+
     switch (currentState)
     {
-        case INITIAL_RED:
-            // Toggle Red, ensure others are OFF
-            HAL_GPIO_TogglePin(GPIOH, GPIO_PIN_12);
-            HAL_GPIO_WritePin(GPIOH, GPIO_PIN_10 | GPIO_PIN_11, GPIO_PIN_RESET);
+        case WAITING_BLUE:
+            HAL_GPIO_WritePin(GPIOH, GPIO_PIN_10, GPIO_PIN_RESET); // Blue ON
             break;
 
-        case WAITING_BLUE:
-            // Toggle Blue, ensure others are OFF
-            HAL_GPIO_TogglePin(GPIOH, GPIO_PIN_10);
-            HAL_GPIO_WritePin(GPIOH, GPIO_PIN_11 | GPIO_PIN_12, GPIO_PIN_RESET);
+        case ERROR_RED:
+            HAL_GPIO_WritePin(GPIOH, GPIO_PIN_12, GPIO_PIN_RESET); // Red ON
             break;
 
         case RECEIVED_GREEN:
-            // Toggle Green, ensure others are OFF
-            HAL_GPIO_TogglePin(GPIOH, GPIO_PIN_11);
-            HAL_GPIO_WritePin(GPIOH, GPIO_PIN_10 | GPIO_PIN_12, GPIO_PIN_RESET);
+            HAL_GPIO_WritePin(GPIOH, GPIO_PIN_11, GPIO_PIN_RESET); // Green ON
             break;
 
         default:
-            // Safety: Turn everything off if state is unknown
+            // Optional: White for Idle/Initial
             HAL_GPIO_WritePin(GPIOH, GPIO_PIN_10 | GPIO_PIN_11 | GPIO_PIN_12, GPIO_PIN_RESET);
             break;
     }
