@@ -111,7 +111,6 @@ int main(void)
   MX_DMA_Init();
   MX_USART6_UART_Init();
   /* USER CODE BEGIN 2 */
-  HAL_UART_Receive_DMA(&huart6, rx_data, 10);
   startTime = HAL_GetTick();
   /* USER CODE END 2 */
 
