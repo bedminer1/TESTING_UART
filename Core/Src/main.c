@@ -58,8 +58,9 @@ static void MX_USART1_UART_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-uint8_t tx_data[] = "Hello World !!!\n\r";
-uint8_t rx_data[sizeof(tx_data)];
+char msg_buf[20];
+uint8_t send_count = 0;
+uint8_t rx_data[20];
 HAL_StatusTypeDef send_status;
 HAL_StatusTypeDef receive_status;
 
@@ -104,9 +105,19 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-	  send_status = HAL_UART_Transmit(&huart6, tx_data, sizeof(tx_data), 100);
-	  HAL_Delay(500);
-//	  receive_status = HAL_UART_Receive(&huart6, rx_data, sizeof(tx_data), 1000);
+//	  sprintf(msg_buf, "Hello World %03u!!\r\n", send_count);
+//	  send_status = HAL_UART_Transmit(&huart6, (uint8_t*)msg_buf, 19, 100);
+//	  send_count++;
+//	  if (send_count > 999) send_count = 0;
+//	  HAL_Delay(500);
+
+	  receive_status = HAL_UART_Receive(&huart6, rx_data, 19, 1000);
+	  HAL_Delay(499);
+	  if (receive_status == HAL_OK)
+	  {
+		  memset(rx_data, 0, sizeof(rx_data));
+	  }
+	  HAL_Delay(1);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
